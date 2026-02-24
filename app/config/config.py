@@ -1,15 +1,17 @@
 import os
 import shutil
 import socket
+from typing import Any
 
 import toml
 from loguru import logger
 
 root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 config_file = f"{root_dir}/config.toml"
+ConfigDict = dict[str, Any]
 
 
-def load_config():
+def load_config() -> ConfigDict:
     # fix: IsADirectoryError: [Errno 21] Is a directory: '/MoneyPrinterTurbo/config.toml'
     if os.path.isdir(config_file):
         shutil.rmtree(config_file)
@@ -32,11 +34,13 @@ def load_config():
     return _config_
 
 
-def save_config():
+def save_config() -> None:
     with open(config_file, "w", encoding="utf-8") as f:
         _cfg["app"] = app
         _cfg["azure"] = azure
         _cfg["siliconflow"] = siliconflow
+        _cfg["voicebox"] = voicebox
+        _cfg["jimeng"] = jimeng
         _cfg["ui"] = ui
         f.write(toml.dumps(_cfg))
 
@@ -47,6 +51,8 @@ whisper = _cfg.get("whisper", {})
 proxy = _cfg.get("proxy", {})
 azure = _cfg.get("azure", {})
 siliconflow = _cfg.get("siliconflow", {})
+voicebox = _cfg.get("voicebox", {})
+jimeng = _cfg.get("jimeng", {})
 ui = _cfg.get(
     "ui",
     {

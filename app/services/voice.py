@@ -76,7 +76,33 @@ def get_gemini_voices() -> list[str]:
     ]
 
 
-def get_all_azure_voices(filter_locals=None) -> list[str]:
+def get_voicebox_voices() -> list[str]:
+    """
+    获取Voicebox的声音配置文件列表
+
+    Returns:
+        声音列表，格式为 ["voicebox:profile_id:profile_name", ...]
+    """
+    try:
+        base_url = config.voicebox.get("base_url", "https://localhost:17493")
+        response = requests.get(f"{base_url}/profiles", timeout=10)
+        if response.status_code == 200:
+            profiles = response.json()
+            voices = []
+            for profile in profiles:
+                profile_id = profile.get("id", "")
+                name = profile.get("name", "Unknown")
+                voices.append(f"voicebox:{profile_id}:{name}")
+            return voices
+        else:
+            logger.warning(f"Failed to fetch Voicebox profiles: {response.status_code}")
+            return []
+    except Exception as e:
+        logger.error(f"Error fetching Voicebox voices: {str(e)}")
+        return []
+
+
+def get_all_azure_voices(filter_locals: list[str] | None = None) -> list[str]:
     azure_voices_str = """
 Name: af-ZA-AdriNeural
 Gender: Female
@@ -1091,7 +1117,7 @@ Gender: Female
     return voices
 
 
-def parse_voice_name(name: str):
+def parse_voice_name(name: str) -> str:
     # zh-CN-XiaoyiNeural-Female
     # zh-CN-YunxiNeural-Male
     # zh-CN-XiaoxiaoMultilingualNeural-V2-Female
@@ -1099,21 +1125,26 @@ def parse_voice_name(name: str):
     return name
 
 
-def is_azure_v2_voice(voice_name: str):
+def is_azure_v2_voice(voice_name: str) -> str:
     voice_name = parse_voice_name(voice_name)
     if voice_name.endswith("-V2"):
         return voice_name.replace("-V2", "").strip()
     return ""
 
 
-def is_siliconflow_voice(voice_name: str):
+def is_siliconflow_voice(voice_name: str) -> bool:
     """检查是否是硅基流动的声音"""
     return voice_name.startswith("siliconflow:")
 
 
-def is_gemini_voice(voice_name: str):
+def is_gemini_voice(voice_name: str) -> bool:
     """检查是否是Gemini TTS的声音"""
     return voice_name.startswith("gemini:")
+
+
+def is_voicebox_voice(voice_name: str) -> bool:
+    """检查是否是Voicebox的声音"""
+    return voice_name.startswith("voicebox:")
 
 
 def tts(
@@ -1153,6 +1184,17 @@ def tts(
             return gemini_tts(text, voice, voice_rate, voice_file, voice_volume)
         else:
             logger.error(f"Invalid gemini voice name format: {voice_name}")
+            return None
+    elif is_voicebox_voice(voice_name):
+        # 从voice_name中提取profile_id
+        # 格式: voicebox:profile_id:profile_name
+        parts = voice_name.split(":")
+        if len(parts) >= 2:
+            profile_id = parts[1]
+            # voicebox在一些设备中可能需要较长时间生成文本。
+            return voicebox_tts(text, profile_id, voice_rate, voice_file, 600, voice_volume)
+        else:
+            logger.error(f"Invalid voicebox voice name format: {voice_name}")
             return None
     return azure_tts_v1(text, voice_name, voice_rate, voice_file)
 
@@ -1340,6 +1382,121 @@ def siliconflow_tts(
     return None
 
 
+def voicebox_tts(
+    text: str,
+    profile_id: str,
+    voice_rate: float,
+    voice_file: str,
+    voice_timeout: int = 60,
+    voice_volume: float = 1.0,
+) -> Union[SubMaker, None]:
+    """
+    使用Voicebox API生成语音
+
+    Args:
+        text: 要转换为语音的文本
+        profile_id: Voicebox语音配置文件ID
+        voice_rate: 语音速度 (暂时不支持，由Voicebox处理)
+        voice_file: 输出的音频文件路径
+        voice_timeout: 超时时间（秒），默认60s.
+        voice_volume: 语音音量 (暂时不支持，由Voicebox处理)
+
+    Returns:
+        SubMaker对象或None
+    """
+    text = text.strip()
+    base_url = config.voicebox.get("base_url", "http://localhost:8000")
+
+    if not base_url:
+        logger.error("Voicebox base_url is not set")
+        return None
+
+    url = f"{base_url}/generate"
+
+    payload = {
+        "text": text,
+        "profile_id": profile_id,
+        "language": "en"  # 默认使用英语，可根据需要调整
+    }
+
+    headers = {"Content-Type": "application/json"}
+
+    for i in range(3):  # 尝试3次
+        try:
+            logger.info(
+                f"start voicebox tts, profile_id: {profile_id}, try: {i + 1}"
+            )
+
+            response = requests.post(url, json=payload, headers=headers, timeout=voice_timeout)
+
+            if response.status_code == 200:
+                # 保存音频文件
+                with open(voice_file, "wb") as f:
+                    f.write(response.content)
+
+                # 创建一个空的SubMaker对象
+                sub_maker = SubMaker()
+
+                # 获取音频文件的实际长度
+                try:
+                    # 尝试使用moviepy获取音频长度
+                    audio_clip = AudioFileClip(voice_file)
+                    audio_duration = audio_clip.duration
+                    audio_clip.close()
+
+                    # 将音频长度转换为100纳秒单位（与edge_tts兼容）
+                    audio_duration_100ns = int(audio_duration * 10000000)
+
+                    # 使用文本分割来创建字幕
+                    sentences = utils.split_string_by_punctuations(text)
+
+                    if sentences:
+                        # 计算每个句子的大致时长（按字符数比例分配）
+                        total_chars = sum(len(s) for s in sentences)
+                        char_duration = (
+                            audio_duration_100ns / total_chars if total_chars > 0 else 0
+                        )
+
+                        current_offset = 0
+                        for sentence in sentences:
+                            if not sentence.strip():
+                                continue
+
+                            # 计算当前句子的时长
+                            sentence_chars = len(sentence)
+                            sentence_duration = int(sentence_chars * char_duration)
+
+                            # 添加到SubMaker
+                            sub_maker.subs.append(sentence)
+                            sub_maker.offset.append(
+                                (current_offset, current_offset + sentence_duration)
+                            )
+
+                            # 更新偏移量
+                            current_offset += sentence_duration
+                    else:
+                        # 如果无法分割，则使用整个文本作为一个字幕
+                        sub_maker.subs = [text]
+                        sub_maker.offset = [(0, audio_duration_100ns)]
+
+                except Exception as e:
+                    logger.warning(f"Failed to create accurate subtitles: {str(e)}")
+                    # 回退到简单的字幕
+                    sub_maker.subs = [text]
+                    sub_maker.offset = [(0, 100000000)]  # 假设10秒
+
+                logger.success(f"voicebox tts succeeded: {voice_file}")
+                return sub_maker
+            else:
+                logger.error(
+                    f"voicebox tts failed with status code {response.status_code}: {response.text}"
+                )
+        except Exception as e:
+            logger.error(f"voicebox tts failed: {str(e)}")
+
+    return None
+
+
 def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker, None]:
     voice_name = is_azure_v2_voice(voice_name)
     if not voice_name:
@@ -1347,7 +1504,7 @@ def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker,
         raise ValueError(f"invalid voice name: {voice_name}")
     text = text.strip()
 
-    def _format_duration_to_offset(duration) -> int:
+    def _format_duration_to_offset(duration: float) -> int:
         if isinstance(duration, str):
             time_obj = datetime.strptime(duration, "%H:%M:%S.%f")
             milliseconds = (
@@ -1371,7 +1528,9 @@ def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker,
 
             sub_maker = SubMaker()
 
-            def speech_synthesizer_word_boundary_cb(evt: speechsdk.SessionEventArgs):
+            def speech_synthesizer_word_boundary_cb(
+                evt: speechsdk.SessionEventArgs,
+            ) -> None:
                 # print('WordBoundary event:')
                 # print('\tBoundaryType: {}'.format(evt.boundary_type))
                 # print('\tAudioOffset: {}ms'.format((evt.audio_offset + 5000)))
@@ -1571,7 +1730,9 @@ def _format_text(text: str) -> str:
     return text
 
 
-def create_subtitle(sub_maker: submaker.SubMaker, text: str, subtitle_file: str):
+def create_subtitle(
+    sub_maker: submaker.SubMaker, text: str, subtitle_file: str
+) -> None:
     """
     优化字幕文件
     1. 将字幕文件按照标点符号分割成多行
@@ -1597,7 +1758,7 @@ def create_subtitle(sub_maker: submaker.SubMaker, text: str, subtitle_file: str)
 
     script_lines = utils.split_string_by_punctuations(text)
 
-    def match_line(_sub_line: str, _sub_index: int):
+    def match_line(_sub_line: str, _sub_index: int) -> str:
         if len(script_lines) <= _sub_index:
             return ""
 
@@ -1661,7 +1822,7 @@ def create_subtitle(sub_maker: submaker.SubMaker, text: str, subtitle_file: str)
         logger.error(f"failed, error: {str(e)}")
 
 
-def _get_audio_duration_from_submaker(sub_maker: submaker.SubMaker):
+def _get_audio_duration_from_submaker(sub_maker: submaker.SubMaker) -> float:
     """
     获取音频时长
     """
@@ -1708,7 +1869,7 @@ if __name__ == "__main__":
     voices = get_all_azure_voices()
     print(len(voices))
 
-    async def _do():
+    async def _do() -> None:
         temp_dir = utils.storage_dir("temp")
 
         voice_names = [

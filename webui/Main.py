@@ -1,6 +1,7 @@
 import os
 import platform
 import sys
+from typing import Any
 from uuid import uuid4
 
 import streamlit as st
@@ -109,7 +110,7 @@ support_locales = [
 ]
 
 
-def get_all_fonts():
+def get_all_fonts() -> list[str]:
     fonts = []
     for root, dirs, files in os.walk(font_dir):
         for file in files:
@@ -119,7 +120,7 @@ def get_all_fonts():
     return fonts
 
 
-def get_all_songs():
+def get_all_songs() -> list[str]:
     songs = []
     for root, dirs, files in os.walk(song_dir):
         for file in files:
@@ -128,7 +129,7 @@ def get_all_songs():
     return songs
 
 
-def open_task_folder(task_id):
+def open_task_folder(task_id: str) -> None:
     try:
         sys = platform.system()
         path = os.path.join(root_dir, "storage", "tasks", task_id)
@@ -141,7 +142,7 @@ def open_task_folder(task_id):
         logger.error(e)
 
 
-def scroll_to_bottom():
+def scroll_to_bottom() -> None:
     js = """
     <script>
         console.log("scroll_to_bottom");
@@ -158,11 +159,11 @@ def scroll_to_bottom():
     st.components.v1.html(js, height=0, width=0)
 
 
-def init_log():
+def init_log() -> None:
     logger.remove()
     _lvl = "DEBUG"
 
-    def format_record(record):
+    def format_record(record: dict[str, Any]) -> str:
         # 获取日志记录中的文件全路径
         file_path = record["file"].path
         # 将绝对路径转换为相对于项目根目录的路径
@@ -195,7 +196,7 @@ init_log()
 locales = utils.load_locales(i18n_dir)
 
 
-def tr(key):
+def tr(key: str) -> str:
     loc = locales.get(st.session_state["ui_language"], {})
     return loc.get("Translation", {}).get(key, key)
 
@@ -452,14 +453,14 @@ if not config.app.get("hide_config", False):
         # 右侧面板 - API 密钥设置
         with right_config_panel:
 
-            def get_keys_from_config(cfg_key):
+            def get_keys_from_config(cfg_key: str) -> str:
                 api_keys = config.app.get(cfg_key, [])
                 if isinstance(api_keys, str):
                     api_keys = [api_keys]
                 api_key = ", ".join(api_keys)
                 return api_key
 
-            def save_keys_to_config(cfg_key, value):
+            def save_keys_to_config(cfg_key: str, value: str) -> None:
                 value = value.replace(" ", "")
                 if value:
                     config.app[cfg_key] = value.split(",")
@@ -477,6 +478,20 @@ if not config.app.get("hide_config", False):
                 tr("Pixabay API Key"), value=pixabay_api_key, type="password"
             )
             save_keys_to_config("pixabay_api_keys", pixabay_api_key)
+
+            st.write(tr("JiMeng Video Settings"))
+
+            jimeng_api_key = st.text_input(
+                tr("JiMeng API Key"), value=config.jimeng.get("api_key", ""), type="password"
+            )
+            config.jimeng["api_key"] = jimeng_api_key
+            config.jimeng.pop("access_key_id", None)
+            config.jimeng.pop("secret_access_key", None)
+
+            jimeng_region = st.text_input(
+                tr("JiMeng Region"), value=config.jimeng.get("region", "cn-north-1")
+            )
+            config.jimeng["region"] = jimeng_region
 
 llm_provider = config.app.get("llm_provider", "").lower()
 panel = st.columns(3)
@@ -562,6 +577,7 @@ with middle_panel:
             (tr("TikTok"), "douyin"),
             (tr("Bilibili"), "bilibili"),
             (tr("Xiaohongshu"), "xiaohongshu"),
+            (tr("JiMeng Video"), "jimeng"),
         ]
 
         saved_video_source_name = config.app.get("video_source", "pexels")
@@ -650,6 +666,7 @@ with middle_panel:
             ("azure-tts-v2", "Azure TTS V2"),
             ("siliconflow", "SiliconFlow TTS"),
             ("gemini-tts", "Google Gemini TTS"),
+            ("voicebox", "Voicebox TTS"),
         ]
 
         # 获取保存的TTS服务器，默认为v1
@@ -672,6 +689,7 @@ with middle_panel:
 
         # 根据选择的TTS服务器获取声音列表
         filtered_voices = []
+        voice_name = ""  # 初始化voice_name
 
         if selected_tts_server == "siliconflow":
             # 获取硅基流动的声音列表
@@ -679,6 +697,9 @@ with middle_panel:
         elif selected_tts_server == "gemini-tts":
             # 获取Gemini TTS的声音列表
             filtered_voices = voice.get_gemini_voices()
+        elif selected_tts_server == "voicebox":
+            # 获取Voicebox的声音列表
+            filtered_voices = voice.get_voicebox_voices()
         else:
             # 获取Azure的声音列表
             all_voices = voice.get_all_azure_voices(filter_locals=None)
@@ -821,6 +842,31 @@ with middle_panel:
             )
 
             config.siliconflow["api_key"] = siliconflow_api_key
+
+        # 当选择Voicebox时，显示配置输入框
+        if selected_tts_server == "voicebox" or (
+            voice_name and voice.is_voicebox_voice(voice_name)
+        ):
+            saved_voicebox_base_url = config.voicebox.get("base_url", "http://localhost:8000")
+
+            voicebox_base_url = st.text_input(
+                tr("Voicebox Base URL"),
+                value=saved_voicebox_base_url,
+                key="voicebox_base_url_input",
+            )
+
+            # 显示Voicebox的说明信息
+            st.info(
+                tr("Voicebox TTS Settings")
+                + ":\n"
+                + "- "
+                + tr("Make sure Voicebox server is running on the specified URL")
+                + "\n"
+                + "- "
+                + tr("Voice profiles need to be created in Voicebox app first")
+            )
+
+            config.voicebox["base_url"] = voicebox_base_url
 
         params.voice_volume = st.selectbox(
             tr("Speech Volume"),
@@ -998,7 +1044,7 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "local"]:
+    if params.video_source not in ["pexels", "pixabay", "local", "jimeng"]:
         st.error(tr("Please Select a Valid Video Source"))
         scroll_to_bottom()
         st.stop()
@@ -1010,6 +1056,18 @@ if start_button:
 
     if params.video_source == "pixabay" and not config.app.get("pixabay_api_keys", ""):
         st.error(tr("Please Enter the Pixabay API Key"))
+        scroll_to_bottom()
+        st.stop()
+
+    if params.video_source == "jimeng":
+        if not config.jimeng.get("api_key", "").strip():
+            st.error(tr("Please Enter the JiMeng API Key"))
+            scroll_to_bottom()
+            st.stop()
+
+    # 验证voice_name
+    if not params.voice_name:
+        st.error(tr("Please Select a Voice/TTS Server"))
         scroll_to_bottom()
         st.stop()
 
@@ -1029,7 +1087,7 @@ if start_button:
     log_container = st.empty()
     log_records = []
 
-    def log_received(msg):
+    def log_received(msg: Any) -> None:
         if config.ui["hide_log"]:
             return
         with log_container:

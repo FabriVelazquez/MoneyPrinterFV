@@ -4,7 +4,8 @@ import os
 import random
 import gc
 import shutil
-from typing import List
+from dataclasses import dataclass
+from typing import Any, List
 from loguru import logger
 from moviepy import (
     AudioFileClip,
@@ -31,27 +32,29 @@ from app.models.schema import (
 from app.services.utils import video_effects
 from app.utils import utils
 
+@dataclass(slots=True)
 class SubClippedVideoClip:
-    def __init__(self, file_path, start_time=None, end_time=None, width=None, height=None, duration=None):
-        self.file_path = file_path
-        self.start_time = start_time
-        self.end_time = end_time
-        self.width = width
-        self.height = height
-        if duration is None:
-            self.duration = end_time - start_time
-        else:
-            self.duration = duration
+    file_path: str
+    start_time: float | None = None
+    end_time: float | None = None
+    width: int | None = None
+    height: int | None = None
+    duration: float | None = None
 
-    def __str__(self):
-        return f"SubClippedVideoClip(file_path={self.file_path}, start_time={self.start_time}, end_time={self.end_time}, duration={self.duration}, width={self.width}, height={self.height})"
+    def __post_init__(self) -> None:
+        if (
+            self.duration is None
+            and self.start_time is not None
+            and self.end_time is not None
+        ):
+            self.duration = self.end_time - self.start_time
 
 
 audio_codec = "aac"
 video_codec = "libx264"
 fps = 30
 
-def close_clip(clip):
+def close_clip(clip: Any) -> None:
     if clip is None:
         return
         
@@ -88,17 +91,17 @@ def close_clip(clip):
     del clip
     gc.collect()
 
-def delete_files(files: List[str] | str):
+def delete_files(files: List[str] | str) -> None:
     if isinstance(files, str):
         files = [files]
         
     for file in files:
         try:
             os.remove(file)
-        except:
+        except Exception:
             pass
 
-def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
+def get_bgm_file(bgm_type: str = "random", bgm_file: str = "") -> str:
     if not bgm_type:
         return ""
 
@@ -109,6 +112,8 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
         suffix = "*.mp3"
         song_dir = utils.song_dir()
         files = glob.glob(os.path.join(song_dir, suffix))
+        if not files:
+            return ""
         return random.choice(files)
 
     return ""
@@ -120,12 +125,18 @@ def combine_videos(
     audio_file: str,
     video_aspect: VideoAspect = VideoAspect.portrait,
     video_concat_mode: VideoConcatMode = VideoConcatMode.random,
-    video_transition_mode: VideoTransitionMode = None,
+    video_transition_mode: VideoTransitionMode | None = None,
     max_clip_duration: int = 5,
     threads: int = 2,
 ) -> str:
+    if not video_paths:
+        raise ValueError("video_paths cannot be empty")
+    if max_clip_duration <= 0:
+        raise ValueError("max_clip_duration must be greater than 0")
+
     audio_clip = AudioFileClip(audio_file)
     audio_duration = audio_clip.duration
+    close_clip(audio_clip)
     logger.info(f"audio duration: {audio_duration} seconds")
     # Required duration of each clip
     req_dur = audio_duration / len(video_paths)
@@ -136,8 +147,9 @@ def combine_videos(
     aspect = VideoAspect(video_aspect)
     video_width, video_height = aspect.to_resolution()
 
-    processed_clips = []
-    subclipped_items = []
+    processed_clips: list[SubClippedVideoClip] = []
+    subclipped_items: list[SubClippedVideoClip] = []
+    transition_mode = video_transition_mode or VideoTransitionMode.none
     video_duration = 0
     for video_path in video_paths:
         clip = VideoFileClip(video_path)
@@ -148,10 +160,19 @@ def combine_videos(
         start_time = 0
 
         while start_time < clip_duration:
-            end_time = min(start_time + max_clip_duration, clip_duration)            
-            if clip_duration - start_time >= max_clip_duration:
-                subclipped_items.append(SubClippedVideoClip(file_path= video_path, start_time=start_time, end_time=end_time, width=clip_w, height=clip_h))
-            start_time = end_time    
+            end_time = min(start_time + max_clip_duration, clip_duration)
+            segment_duration = end_time - start_time
+            if segment_duration > 0:
+                subclipped_items.append(
+                    SubClippedVideoClip(
+                        file_path=video_path,
+                        start_time=start_time,
+                        end_time=end_time,
+                        width=clip_w,
+                        height=clip_h,
+                    )
+                )
+            start_time = end_time
             if video_concat_mode.value == VideoConcatMode.sequential.value:
                 break
 
@@ -194,17 +215,17 @@ def combine_videos(
                     clip = CompositeVideoClip([background, clip_resized])
                     
             shuffle_side = random.choice(["left", "right", "top", "bottom"])
-            if video_transition_mode.value == VideoTransitionMode.none.value:
+            if transition_mode.value == VideoTransitionMode.none.value:
                 clip = clip
-            elif video_transition_mode.value == VideoTransitionMode.fade_in.value:
+            elif transition_mode.value == VideoTransitionMode.fade_in.value:
                 clip = video_effects.fadein_transition(clip, 1)
-            elif video_transition_mode.value == VideoTransitionMode.fade_out.value:
+            elif transition_mode.value == VideoTransitionMode.fade_out.value:
                 clip = video_effects.fadeout_transition(clip, 1)
-            elif video_transition_mode.value == VideoTransitionMode.slide_in.value:
+            elif transition_mode.value == VideoTransitionMode.slide_in.value:
                 clip = video_effects.slidein_transition(clip, 1, shuffle_side)
-            elif video_transition_mode.value == VideoTransitionMode.slide_out.value:
+            elif transition_mode.value == VideoTransitionMode.slide_out.value:
                 clip = video_effects.slideout_transition(clip, 1, shuffle_side)
-            elif video_transition_mode.value == VideoTransitionMode.shuffle.value:
+            elif transition_mode.value == VideoTransitionMode.shuffle.value:
                 transition_funcs = [
                     lambda c: video_effects.fadein_transition(c, 1),
                     lambda c: video_effects.fadeout_transition(c, 1),
@@ -219,12 +240,26 @@ def combine_videos(
                 
             # wirte clip to temp file
             clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
-            clip.write_videofile(clip_file, logger=None, fps=fps, codec=video_codec)
+            clip_duration = clip.duration
+            clip.write_videofile(
+                clip_file,
+                logger=None,
+                fps=fps,
+                codec=video_codec,
+                audio=False,
+            )
             
             close_clip(clip)
         
-            processed_clips.append(SubClippedVideoClip(file_path=clip_file, duration=clip.duration, width=clip_w, height=clip_h))
-            video_duration += clip.duration
+            processed_clips.append(
+                SubClippedVideoClip(
+                    file_path=clip_file,
+                    duration=clip_duration,
+                    width=clip_w,
+                    height=clip_h,
+                )
+            )
+            video_duration += clip_duration
             
         except Exception as e:
             logger.error(f"failed to process clip: {str(e)}")
@@ -233,6 +268,8 @@ def combine_videos(
     if video_duration < audio_duration:
         logger.warning(f"video duration ({video_duration:.2f}s) is shorter than audio duration ({audio_duration:.2f}s), looping clips to match audio length.")
         base_clips = processed_clips.copy()
+        if not base_clips:
+            raise RuntimeError("no valid clips were generated from input videos")
         for clip in itertools.cycle(base_clips):
             if video_duration >= audio_duration:
                 break
@@ -243,14 +280,13 @@ def combine_videos(
     # merge video clips progressively, avoid loading all videos at once to avoid memory overflow
     logger.info("starting clip merging process")
     if not processed_clips:
-        logger.warning("no clips available for merging")
-        return combined_video_path
+        raise RuntimeError("no clips available for merging")
     
     # if there is only one clip, use it directly
     if len(processed_clips) == 1:
         logger.info("using single clip directly")
         shutil.copy(processed_clips[0].file_path, combined_video_path)
-        delete_files(processed_clips)
+        delete_files(processed_clips[0].file_path)
         logger.info("video combining completed")
         return combined_video_path
     
@@ -279,9 +315,8 @@ def combine_videos(
                 filename=temp_merged_next,
                 threads=threads,
                 logger=None,
-                temp_audiofile_path=output_dir,
-                audio_codec=audio_codec,
                 fps=fps,
+                audio=False,
             )
             close_clip(base_clip)
             close_clip(next_clip)
@@ -306,11 +341,13 @@ def combine_videos(
     return combined_video_path
 
 
-def wrap_text(text, max_width, font="Arial", fontsize=60):
+def wrap_text(
+    text: str, max_width: float, font: str = "Arial", fontsize: int = 60
+) -> tuple[str, int]:
     # Create ImageFont
     font = ImageFont.truetype(font, fontsize)
 
-    def get_text_size(inner_text):
+    def get_text_size(inner_text: str) -> tuple[int, int]:
         inner_text = inner_text.strip()
         left, top, right, bottom = font.getbbox(inner_text)
         return right - left, bottom - top
@@ -366,7 +403,7 @@ def generate_video(
     subtitle_path: str,
     output_file: str,
     params: VideoParams,
-):
+) -> None:
     aspect = VideoAspect(params.video_aspect)
     video_width, video_height = aspect.to_resolution()
 
@@ -391,7 +428,7 @@ def generate_video(
 
         logger.info(f"  ⑤ font: {font_path}")
 
-    def create_text_clip(subtitle_item):
+    def create_text_clip(subtitle_item: tuple[tuple[float, float], str]) -> TextClip:
         params.font_size = int(params.font_size)
         params.stroke_width = int(params.stroke_width)
         phrase = subtitle_item[1]
@@ -440,7 +477,7 @@ def generate_video(
         [afx.MultiplyVolume(params.voice_volume)]
     )
 
-    def make_textclip(text):
+    def make_textclip(text: str) -> TextClip:
         return TextClip(
             text=text,
             font=font_path,
@@ -484,7 +521,12 @@ def generate_video(
     del video_clip
 
 
-def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
+def preprocess_video(
+    materials: List[MaterialInfo] | None, clip_duration: int = 4
+) -> List[MaterialInfo]:
+    if not materials:
+        return []
+
     for material in materials:
         if not material.url:
             continue
