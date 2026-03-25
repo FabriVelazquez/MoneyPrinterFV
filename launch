@@ -1,0 +1,17 @@
+import subprocess
+import time
+
+print("🚀 Starting MoneyPrinterTurbo...")
+# Start Streamlit server on port 8501
+streamlit_proc = subprocess.Popen([
+    "streamlit", "run", "./webui/Main.py", "--server.port=8501"
+])
+
+# Wait for the server to initialize
+time.sleep(5)
+
+print("🌐 Creating ngrok tunnel to expose the MoneyPrinterTurbo...")
+public_url = ngrok.connect(8501, bind_tls=True)
+
+print("✅ Deployment complete! Access your MoneyPrinterTurbo at:")
+print(public_url)
