@@ -1,0 +1,8 @@
+from pyngrok import ngrok
+
+# Terminate any existing ngrok tunnels
+ngrok.kill()
+
+# Set your authentication token
+# Replace "your_ngrok_auth_token" with your actual token
+ngrok.set_auth_token("your_ngrok_auth_token")
