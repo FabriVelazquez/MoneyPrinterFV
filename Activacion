@@ -1,0 +1,4 @@
+!git clone https://github.com/harry0703/MoneyPrinterTurbo.git
+%cd MoneyPrinterTurbo
+!pip install -q -r requirements.txt
+!pip install pyngrok --quiet
